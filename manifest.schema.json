@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hns.one/schemas/hnsapp-manifest-v1.json",
+  "title": "Handshake App manifest (manifest_version 1)",
+  "description": "The app manifest defined by HANDSHAKE-APPS.md v0.1. Hosts validate against this schema, then apply the semantic rules the spec adds on top (capability registry, shape discrimination, signature verification). Unknown TOP-LEVEL fields are ignored for forward compatibility; unknown CAPABILITY ids make the install fail closed (spec section 4.1).",
+  "type": "object",
+  "required": ["manifest_version", "id", "app", "tlds", "capabilities", "ui"],
+  "additionalProperties": true,
+  "properties": {
+    "manifest_version": {
+      "description": "The manifest format version this document conforms to. This schema defines version 1; a host that does not recognize the version MUST refuse to install.",
+      "const": 1
+    },
+    "id": {
+      "description": "The app's identity: a Handshake name the author holds (dot-separated labels, each 1-63 chars, letters/digits/hyphens, no leading or trailing hyphen). Grants and shape tags are keyed by this id; authorship is proven against this name's _hns control-key anchor.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+      "maxLength": 200
+    },
+    "app": {
+      "type": "object",
+      "required": ["name", "version", "author"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "version": {
+          "description": "Semver, display and update-ordering only; capability diffs, not versions, drive re-consent.",
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$"
+        },
+        "author": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": true,
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "handshake": {
+              "description": "The author's Handshake name. When present it MUST equal the manifest id.",
+              "type": "string",
+              "maxLength": 200
+            },
+            "contact": { "type": "string", "maxLength": 200 }
+          }
+        },
+        "homepage": { "type": "string", "format": "uri", "maxLength": 300 },
+        "description": {
+          "description": "App-supplied prose. Untrusted: consent UIs may show it only as attributed, sanitized secondary text.",
+          "type": "string",
+          "maxLength": 500
+        }
+      }
+    },
+    "tlds": {
+      "description": "The zones the app operates in. A ceiling, never a grant: capabilities scoped 'claimed-label' are only satisfiable by user-held names under these TLDs.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+      },
+      "maxItems": 8,
+      "uniqueItems": true
+    },
+    "permissions": {
+      "description": "Non-DNS, read-only capabilities the app opts in to, as a flat {permission: level} map (HANDSHAKE-APPS.md section 5.5). v0.1 defines 'identity': 'read' — the app may read the user's MAIN identity as PUBLIC info only (native name, npub, NIP-05). A permission grants nothing unless declared here; the mediator refuses the corresponding op otherwise (opt-in and visible, never ambient). No permission ever conveys a key, a secret, or the user's other names.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "description": "Read the user's main identity as public info only (name, native label, npub, nip05). The reference consumer is the 2url app; the mediator returns no key or secret.",
+          "enum": ["read"]
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["cap", "scope"],
+        "additionalProperties": true,
+        "properties": {
+          "cap": {
+            "description": "Namespaced capability id. Un-prefixed dotted ids (name.*, dns.*, content.*, identity.*) are reserved for the standard: name.claim, name.list, dns.read, dns.set-record, dns.remove-record, dns.delegate (dangerous), content.publish, identity.authenticate (mint a NIP-98 token proving control of a granted name, bound to the app's own origin — HANDSHAKE-APPS.md section 5.6; ships today as the extension one.hns.auth.nip98). Third-party ids carry a reverse-DNS namespace. A host that does not implement a declared cap MUST refuse the install.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9.-]{1,80}$"
+          },
+          "scope": {
+            "description": "'claimed-label': names under the declared tlds that the user claimed or granted through this app. 'any-held-name': any single name the user explicitly grants via the picker.",
+            "enum": ["claimed-label", "any-held-name"]
+          },
+          "record_schema": {
+            "description": "REQUIRED for dns.set-record / dns.remove-record / dns.read: the key of the entry in 'records' this capability is allowed to write or read. There is deliberately no way to request a bare record type.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,40}$"
+          },
+          "reason": {
+            "description": "App-supplied justification. Untrusted; secondary text only.",
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "records": {
+      "description": "The exact record shapes the app reads/writes - its public data contract, and the namespace that isolates it from other apps. Every shape a DNS capability names MUST appear here, and every writing shape MUST carry a literal discriminator: a value prefix '<tag>=' (TXT) or an owner starting '_<tag>'.",
+      "type": "object",
+      "maxProperties": 8,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["owner", "type", "meaning"],
+        "additionalProperties": true,
+        "properties": {
+          "owner": {
+            "description": "Owner name RELATIVE to the granted name: '@' is the granted name itself; '_tag' or '_tag.@' service prefixes; 'label.@' one level below. Never absolute, never another name's subtree. May not begin with _hns or _atproto (locked surfaces are unreachable).",
+            "type": "string",
+            "pattern": "^(@|_?[a-z0-9][a-z0-9-]{0,62}(\\.@)?)$"
+          },
+          "type": {
+            "description": "One record type from the registry's USER_TYPES. NS, DS and CNAME shapes are dangerous and require the dns.delegate treatment.",
+            "enum": ["A", "AAAA", "CNAME", "TXT", "MX", "SRV", "TLSA", "CAA", "NS", "DS"]
+          },
+          "value": {
+            "type": "object",
+            "required": ["template"],
+            "additionalProperties": true,
+            "properties": {
+              "template": {
+                "description": "The value grammar, with {field} placeholders and [optional;parts]. The mediator expands this template from propose() fields; apps never supply raw values.",
+                "type": "string",
+                "maxLength": 300
+              },
+              "prefix": {
+                "description": "The literal value discriminator ('<tag>='). Required for TXT shapes; the tag must be unique among installed apps and must not be a platform-reserved tag (ipfs, ar, hns, atproto, nostr, dane) unless the shape is the platform flow that owns it.",
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,30}=$"
+              },
+              "fields": {
+                "description": "Per-placeholder grammars the mediator validates before expansion.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "grammar": {
+                      "description": "A named field grammar the mediator implements: e.g. https-url (https only, no userinfo, no literal-IP host), ipfs-cid, arweave-txid, label, uint16, enum.",
+                      "type": "string",
+                      "maxLength": 40
+                    },
+                    "enum": { "type": "array", "items": { "type": "string" } },
+                    "default": { "type": "string" },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                  }
+                }
+              }
+            }
+          },
+          "limit": {
+            "description": "Maximum records of this shape per granted name. Defaults to 1.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 1
+          },
+          "meaning": {
+            "description": "One sentence: what this record does. Rendered (attributed) in docs and settings, not as the consent primary.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": true,
+      "properties": {
+        "entry": {
+          "description": "The app's page, and the ONLY origin that receives the window.handshake provider. Must be an origin under the app's own name (https://<id>.hns.one/, https://<label>.<id>.hns.one/, native <id> scheme URL, or a first-party browser scheme).",
+          "type": "string",
+          "format": "uri",
+          "maxLength": 300
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "requires": {
+          "description": "Gateway serving features the app depends on, as namespaced ids. v0.1 defines one.hns.gateway.content.v1 (baseline ipfs=/ar= serving, exists) and one.hns.gateway.redirect.v1 (redirect= TXT serving, specified in HANDSHAKE-APPS.md section 10.2).",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,80}$" },
+          "maxItems": 8,
+          "uniqueItems": true
+        }
+      }
+    },
+    "signature": {
+      "description": "Detached authorship proof: a BIP-340 signature by the app name's control key (anchored in the DNSSEC-signed _hns record for `id`) over the RFC 8785-canonicalized manifest with this member removed, carried as a kind-30078 event.",
+      "type": "object",
+      "required": ["alg", "pubkey", "created_at", "sig"],
+      "additionalProperties": true,
+      "properties": {
+        "alg": { "const": "bip340-nostr-30078" },
+        "pubkey": {
+          "description": "The signing key, x-only hex. Must match the _hns anchor for `id` for the manifest to verify.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "created_at": { "type": "integer", "minimum": 1 },
+        "d": {
+          "description": "The event d-tag: 'hnsapp:<id>:<sha256 hex of the canonical manifest without signature>'.",
+          "type": "string",
+          "pattern": "^hnsapp:[a-z0-9.-]{1,200}:[0-9a-f]{64}$"
+        },
+        "sig": { "type": "string", "pattern": "^[0-9a-f]{128}$" }
+      }
+    }
+  }
+}

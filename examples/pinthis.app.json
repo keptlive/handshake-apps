@@ -1,0 +1,102 @@
+{
+  "manifest_version": 1,
+  "id": "pinthis",
+  "x-status": "RETROACTIVE WORKED EXAMPLE. This manifest expresses the IPFS publishing flow that already exists (agregore://publish -> POST /api/publish -> pin -> ipfs=<cid> TXT + gateway A) in the Handshake-Apps standard, now with a real control-key/NIP-98 publish path (content.publish no longer rides the operator token). It is still unsigned: `pinthis` is held and delegated to us but not yet DNSSEC-anchored, so its _hns record does not exist; sign it with the name's control key once the DS commit lands (HANDSHAKE-APPS.md section 7).",
+  "app": {
+    "name": "pinthis — publish to your name",
+    "version": "0.1.0",
+    "author": {
+      "name": "HNS.ONE",
+      "handshake": "pinthis",
+      "contact": "https://hns.one/"
+    },
+    "homepage": "https://hns.one/",
+    "description": "Publish a page, a folder, or a zip to IPFS and point one of your names at it. Your name serves the content from the gateway and natively over ipfs://."
+  },
+  "tlds": ["pinthis"],
+  "capabilities": [
+    {
+      "cap": "name.claim",
+      "scope": "claimed-label",
+      "reason": "Claim a free <you>.pinthis name to publish under."
+    },
+    {
+      "cap": "name.list",
+      "scope": "any-held-name",
+      "reason": "Show the names you can publish to."
+    },
+    {
+      "cap": "content.publish",
+      "scope": "any-held-name",
+      "reason": "Pin your files and point the chosen name at the result. The publish pipeline itself writes the pointer records declared below; this app never composes DNS records by hand."
+    },
+    {
+      "cap": "dns.read",
+      "scope": "any-held-name",
+      "record_schema": "site_pointer",
+      "reason": "Show whether a name currently has a published site."
+    }
+  ],
+  "records": {
+    "site_pointer": {
+      "owner": "@",
+      "type": "TXT",
+      "value": {
+        "template": "ipfs={cid}",
+        "prefix": "ipfs=",
+        "fields": {
+          "cid": { "grammar": "ipfs-cid" }
+        }
+      },
+      "limit": 1,
+      "meaning": "Points the name at the published site's content hash; the gateway and ipfs:// both serve it.",
+      "x-platform-reserved-tag": "The `ipfs` tag is platform-reserved (HANDSHAKE-APPS.md section 6); this manifest may declare it because content.publish routes every write through the publish pipeline that owns the pointer (publishing.services._point_zone_at), and dns_records.publish_pointer treats exactly this shape as the site pointer."
+    },
+    "archive_pointer": {
+      "owner": "@",
+      "type": "TXT",
+      "value": {
+        "template": "ar={txid}",
+        "prefix": "ar=",
+        "fields": {
+          "txid": { "grammar": "arweave-txid" }
+        }
+      },
+      "limit": 1,
+      "meaning": "Permanent Arweave copy of a single-file publish; served when no IPFS pointer exists.",
+      "x-platform-reserved-tag": "Same reservation as site_pointer."
+    },
+    "gateway_a": {
+      "owner": "@",
+      "type": "A",
+      "value": {
+        "template": "{gateway_ip}",
+        "fields": {
+          "gateway_ip": { "grammar": "operator-gateway-ip" }
+        }
+      },
+      "limit": 1,
+      "meaning": "Makes the name reachable in ordinary browsers by pointing it at the HNS.ONE gateway, which serves the pinned content."
+    }
+  },
+  "ui": {
+    "entry": "agregore://publish",
+    "x-note": "First-party native page today (browser/src/pages/publish.html). A third-party re-implementation would live at an origin under its own name, e.g. https://app.pinthis.hns.one/."
+  },
+  "gateway": {
+    "requires": ["one.hns.gateway.content.v1"]
+  },
+  "x-implementation-today": {
+    "exists": [
+      "agregore://publish page and publish-intake flow, control-key signed (browser/src/publish.js): the user path signs each request with the name's vault control key over NIP-98, no panel and no token — the operator/token client moved to browser/src/operator/publish-operator.js and is unwired.",
+      "POST /api/publish + /api/publish/targets accept a NIP-98 Authorization header from any name's control key (web/core/api_publish.py: _publish_identity/_targets_identity), verified by domains.identity.authenticate + resolve_target exactly as /api/dns/mutate and /api/identity/*; the operator bearer-token path (X-HNS-Panel-Token) is unchanged beside it. /api/publish/claim is the token path; control-key users claim via /api/identity/claim.",
+      "control-key publish pipeline (web/publishing/services.py: submit_identity attributes a free IPFS publish to the domains.IdentityKey, no account and no credit charge; run_publication + _point_zone_at write ipfs=<cid> TXT + gateway A into the tenant zone and queue publish_sign for the operator's DNSSEC re-sign)",
+      "gateway content serving for ipfs=/ar= pointers (gateway.py pointer_for/_serve_ipfs)"
+    ],
+    "gaps": [
+      "`pinthis` is held, delegated to us and provisioned (served Zone + ManagedName, open_for_claims), but not yet DNSSEC-anchored: signing THIS manifest needs the name's _hns anchor (dnssec.py sign + an on-chain DS commit). Deploy steps still owed by the operator: the tenant registry export (so app.hns.one offers pinthis), dotted-tls.py apply pinthis (so <label>.pinthis.hns.one gets a cert; until then the flat <label>-pinthis.hns.one form serves), and a panel/tenant restart.",
+      "The publish_sign job that a tenant publish queues is not drained yet — the record serves unsigned until the operator batch that also drains identity_sign runs (PUBLISH-REDESIGN.md D8). Same standing as identity_sign.",
+      "No generic window.handshake mediator exists yet: the publish flow is first-party browser code that already follows the standard's model (the app declares content.publish; the browser holds the key and signs NIP-98 in main; the page never sees a key), but it is not yet expressed through the provider surface a third-party app would use."
+    ]
+  }
+}
