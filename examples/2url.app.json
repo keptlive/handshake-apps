@@ -1,7 +1,6 @@
 {
   "manifest_version": 1,
   "id": "2url",
-  "x-status": "WORKED EXAMPLE — the standard's second app, now implemented in this tree (2026-08-22). BUILT: the gateway feature one.hns.gateway.redirect.v1 (gateway.py + /_gateway/features), the redirect write path (control-key NIP-98 through /api/dns/mutate, with a defense-in-depth validator in web/domains/dns_records.py), and a first-party browser app (agregore://2url, src/twourl.js). The `2url` name is held, delegated to ns1/ns2.hns.one, and provisioned open-for-claims. UNSIGNED still: distributing this manifest to THIRD-PARTY hosts needs the DNSSEC _hns anchor (dnssec.py sign + on-chain DS commit) so signature.pubkey can be verified (HANDSHAKE-APPS.md sections 7 and 11). The shipped app is first-party (part of the browser TCB), so it needs no signed manifest to be trusted; this manifest documents the capability contract it honors.",
   "app": {
     "name": "2url — link shortener",
     "version": "0.1.0",
@@ -10,7 +9,6 @@
       "handshake": "2url",
       "contact": "https://hns.one/"
     },
-    "homepage": "https://2url.hns.one/",
     "description": "Short links on names you own. Claim go.2url, point it at any https URL, and share foo.2url / foo-2url.hns.one — the redirect is a DNS record on YOUR name, so it keeps working even if this app disappears."
   },
   "tlds": ["2url"],
@@ -74,32 +72,19 @@
     }
   },
   "ui": {
-    "entry": "agregore://2url",
-    "x-note": "The SHIPPED implementation is first-party: a browser chrome page at agregore://2url (src/twourl.js), which reaches the same signed DNS-mutate path via the double-gated hnsone-twourl bridge — the schema permits a first-party browser scheme here. The THIRD-PARTY hosted form the standard is written for is https://app.2url.hns.one/ (a label under the app's OWN zone, L8-compliant); it awaits the generic window.handshake provider (section 11) and the dotted-TLS per-zone SAN (*.2url.hns.one)."
+    "entry": "wildroot://2url",
+    "x-note": "The shipped app is a first-party browser page at wildroot://2url; the schema permits a first-party browser scheme here. A third-party hosted version would use an origin under the app's own zone, such as app.2url.hns.one."
   },
   "gateway": {
     "requires": ["one.hns.gateway.redirect.v1"],
-    "x-note": "IMPLEMENTED in gateway.py (redirect_for/_serve_redirect); advertised at /_gateway/features so a host can check this requirement before promising the app it works."
+    "x-note": "Served by the hns.one gateway and advertised at /_gateway/features on each name's host, so a host can check this requirement before promising the app it works."
   },
   "x-end-to-end-flow": [
-    "1. User opens the 2url app (shipped: agregore://2url, a first-party chrome page; third-party form: https://app.2url.hns.one/ once the window.handshake provider ships). The app is untrusted and reaches only the semantic mediation ops — it can never name an endpoint or obtain a signature over bytes it chose.",
+    "1. User opens the 2url app (shipped as wildroot://2url, a first-party browser page). The app is untrusted and reaches only the semantic mediation ops — it can never name an endpoint or obtain a signature over bytes it chose.",
     "2. App asks to claim go.2url. The MEDIATOR (browser main) checks /api/identity/available, generates a fresh control key in the vault, signs the kind-30078 claim receipt in the main process, POSTs /api/identity/claim with a NIP-98 header, and records the name. The app sees only {name:'go.2url', state}.",
     "3. App proposes a redirect: it names the URL (https://example.com/deep/link). The mediator validates it against the https-url grammar, expands the template to the concrete record  go.2url: '@' TXT 'redirect=https://example.com/deep/link', and shows the concrete effect: 'go.2url → https://example.com/deep/link' (raw record behind a disclosure).",
     "4. On confirmation the mediator signs NIP-98 with go.2url's control key (vault, main process) and POSTs /api/dns/mutate {name:'go.2url', action:'add', record:{owner:'@', type:'TXT', value:'redirect=https://example.com/deep/link'}}. The registry re-runs scope checks, validators (including the redirect grammar, defense in depth), locks and limits, commits under the zone lock, and re-signs (or queues record_sign on the tenant plane).",
     "5. Visiting go.2url natively, or go-2url.hns.one / go.2url.hns.one on the gateway, answers 302 Location: https://example.com/deep/link with no-referrer, noindex, and a 300s cache (section 10.2). redirect= outranks ipfs=/ar=; identity endpoints (/.well-known/*) still outrank the redirect; a malformed record is ignored (fail safe); two records are a config error; a self-target loops-checks to an error; a denylisted name is 410.",
     "6. Retiring the link is the same shape with action:'delete'; the registry's delete path matches the exact (owner,type,value) triple. The record outlives the app — the link belongs to the name, not the app."
-  ],
-  "x-implementation-today": {
-    "exists": [
-      "GATEWAY: one.hns.gateway.redirect.v1 in gateway.py — valid_redirect_url (https-only, no userinfo, no literal-IP, <=480 bytes), parse_redirect (fail-safe on any malformed component), redirect_for (precedence over ipfs=/ar=; two records => 500 config error; malformed => ignored), _serve_redirect (declared 3xx, no-referrer, noindex, 300s cache, self-target loop check, operator denylist => 410), and /_gateway/features. Tests in test_gateway.py.",
-      "WRITE PATH: the redirect record is written through the EXISTING DNS editor — /api/dns/mutate with NIP-98 auth and every dns_records rule. A defense-in-depth validator (web/domains/dns_records._validate_redirect) refuses an unsafe redirect= at write time with the same grammar the gateway serves. Tests in web/domains/tests_dns.py.",
-      "BROWSER APP: agregore://2url (src/twourl.js main IPC, src/twourl-page-preload.js bridge, src/pages/2url.html) — claim a .2url name, preview the concrete redirect, set/update/remove it. The pure mediation logic (validRedirectUrl, buildRedirectValue, proposeRedirect, readRedirect) lives in identity-account.js and is tested in browser/tests/hns/twourl.test.js. Native-name display: the app shows foo.2url, never foo.2url.hns.one.",
-      "CLAIM + gateway host routing for <label>.<zone> in native, dotted and hyphen forms were already present."
-    ],
-    "gaps": [
-      "GENERIC PROVIDER: the shipped app is first-party and uses the browser's chrome-page bridge. The generic window.handshake provider + per-origin injection + install/verify + grant store + main-owned consent OVERLAY (section 11) — what a THIRD-PARTY hosted 2url at app.2url.hns.one would use — is not built here. This app's consent is the concrete-effect preview + the narrow semantic op boundary, not yet the WebContentsView overlay of section 5.4.",
-      "SIGNATURE / DISTRIBUTION: this manifest is unsigned. Signing for third-party distribution needs the DNSSEC _hns anchor (dnssec.py sign + on-chain DS commit; spends coin — announce first, snipe.py doctor after).",
-      "DEPLOY: the gateway redirect feature is implemented and tested but must be DEPLOYED to the VPS gateway to serve live. For the hosted third-party entry app.2url.hns.one and dotted foo.2url.hns.one, the dotted-TLS per-zone SAN must be queued (dotted-tls.py apply 2url)."
-    ]
-  }
+  ]
 }
