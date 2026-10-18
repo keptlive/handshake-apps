@@ -51,7 +51,7 @@
       }
     },
     "tlds": {
-      "description": "The zones the app operates in. A ceiling, never a grant: capabilities scoped 'claimed-label' are only satisfiable by user-held names under these TLDs.",
+      "description": "The zones the app operates in. A ceiling, never a grant: capabilities scoped 'claimed-label' are only satisfiable by user-held names under these TLDs, and names.claim is honored only for a tld listed here (an app cannot register a name in a namespace it never declared).",
       "type": "array",
       "items": {
         "type": "string",
@@ -81,7 +81,7 @@
         "additionalProperties": true,
         "properties": {
           "cap": {
-            "description": "Namespaced capability id. Un-prefixed dotted ids (name.*, dns.*, content.*, identity.*) are reserved for the standard: name.claim, name.list, dns.read, dns.set-record, dns.remove-record, dns.delegate (dangerous), content.publish, identity.authenticate (mint a NIP-98 token proving control of a granted name, bound to the app's own origin — HANDSHAKE-APPS.md section 5.6; ships today as the extension one.hns.auth.nip98). Third-party ids carry a reverse-DNS namespace. A host that does not implement a declared cap MUST refuse the install.",
+            "description": "Namespaced capability id. Un-prefixed dotted ids (names.*, name.*, dns.*, content.*, identity.*) are reserved for the standard: names.claim (register a NEW name under one of the manifest's `tlds` for the user, keyed in the user's own vault, on a voucher the app's server obtained from the registry — HANDSHAKE-APPS.md section 5.8; supersedes v0.1's name.claim, which no host honors), name.list, dns.read, dns.set-record, dns.remove-record, dns.delegate (dangerous), content.publish, identity.authenticate (mint a NIP-98 token proving control of a granted name, bound to the app's own origin — HANDSHAKE-APPS.md section 5.6; ships today as the extension one.hns.auth.nip98). Third-party ids carry a reverse-DNS namespace. A host that does not implement a declared cap MUST refuse the install.",
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9.-]{1,80}$"
           },
@@ -177,10 +177,17 @@
       "additionalProperties": true,
       "properties": {
         "entry": {
-          "description": "The app's page, and the ONLY origin that receives the window.handshake provider. Must be an origin under the app's own name (https://<id>.hns.one/, https://<label>.<id>.hns.one/, native <id> scheme URL, or a first-party browser scheme).",
-          "type": "string",
-          "format": "uri",
-          "maxLength": 300
+          "description": "The app's page, and the ONLY origin(s) that receive the window.handshake provider. Must be an origin under the app's own name (https://<id>.hns.one/, https://<label>.<id>.hns.one/, native <id> scheme URL, or a first-party browser scheme). A LIST is one app reached at both its native name and its gateway mirror (V0.2-DELTA D5; HANDSHAKE-APPS.md section 5.2 'origin ownership'); every entry must be owned by the id, and one that is not fails the whole manifest.",
+          "oneOf": [
+            { "type": "string", "format": "uri", "maxLength": 300 },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": { "type": "string", "format": "uri", "maxLength": 300 }
+            }
+          ]
         }
       }
     },

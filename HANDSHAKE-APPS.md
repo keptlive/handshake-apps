@@ -1,11 +1,38 @@
-# Handshake Apps — a community standard for name-driven applications
+# Handshake Apps — a proposed standard for name-driven applications
 
-**Version 0.1 (draft) — 2026-08-22.**
-Status: DESIGN. Nothing in `browser/`, `web/` or `gateway.py` implements this
-yet; §11 says exactly what exists and what must be built. The manifest schema
-is `manifest.schema.json` in this directory; the threat model is `SECURITY.md`
-and is normative — where this document and SECURITY.md disagree, SECURITY.md
-wins.
+**Version 0.2 (draft) — 2026-08-22, amended 2026-09-13.**
+Status: PARTLY IMPLEMENTED. Wildroot ships the mediator subset `V0.2-DELTA.md`
+§M lists — install/update, grants, the provider, `version`/`names`/`identity`/
+`auth.token` — against two live apps (`.pxls`, MyPastebin), plus `names.claim`
+in its voucher-backed form (§5.8, 2026-09-13, MyPastebin is the reference
+consumer); `records.get`, `records.propose` and `content.publish` are not built
+and answer `OutOfScope`. Both apps are by the author of this document; there
+are no independent implementations yet.
+§11 says what exists. The manifest schema is `manifest.schema.json`
+in this directory; the threat model is `SECURITY.md` and is normative — where
+this document and SECURITY.md disagree, SECURITY.md wins. File and function
+names in this document refer to the Wildroot browser and the HNS.ONE registry,
+whose source is not public.
+
+**Amended 2026-09-13, from two failures on a live app** (MyPastebin 1.2.0). Both
+were the standard being under-specified rather than the host being careless, so
+both are fixed here as well as in the host:
+- §5.2 "the picker" and §5.4 — what `names.request` must actually show. A
+  message box of four names is now explicitly non-conforming.
+- §5.6 "which name signs" — the v0.1/D1 rule refused with `UserDeclined` when
+  several names were granted and none was the primary. Refusing on a host-side
+  ambiguity is not the user declining; there is now a third rung.
+- §5.7 — the error table, which did not exist, plus the requirement that `code`
+  is a property of the rejected `Error`.
+- §8 "Update / when the host looks" — the update flow had no trigger, so a
+  conforming host could satisfy every word of it and never once re-read a
+  manifest. That is what happened.
+- §5.8 `names.claim` — the op v0.1 sketched as "claim a free label under a
+  declared TLD" assumed an OPEN TLD. A partner TLD (`.mypastebin`) is claimed
+  only with a token that must never enter a browser, so the reference app
+  minted the user's key on its server and handed a key file over. The voucher
+  model replaces that: the app's server vouches, the browser claims. One key
+  per name, in the vault, like every other name.
 
 ---
 
@@ -29,7 +56,7 @@ expressed retroactively) and `2url` (a new link shortener), in `examples/`.
 |---|---|
 | **App** | Untrusted third-party code + a signed manifest. Runs as an ordinary web page (or packaged page); has **no** privileged access. |
 | **Mediator** | The browser's privileged main process. Holds the vault, renders consent, signs NIP-98, talks to the registry. The only trusted computing base on the client. |
-| **Registry panel** | The HNS.ONE web app (`~/hns/web`). Enforces ownership (`resolve_target`), record validity (`dns_records.py`), managed-record locks, and limits. Already exists. |
+| **Registry panel** | The HNS.ONE web app. Enforces ownership (`resolve_target`), record validity (`dns_records.py`), managed-record locks, and limits. Already exists. |
 | **Gateway** | `gateway.py` — serves a name's published content and identity endpoints from its zone records. |
 | **Name** | A Handshake name the *user* holds: either a free label under an open registry TLD (owned by a control key, no account) or an imported TLD/SLD (owned by an account, drivable by a linked control key). |
 | **Control key** | The name's BIP-340 key, generated and stored in the browser vault (`browser/src/identity/identity-account.js`). Signs claim receipts and NIP-98 requests **in the main process only**. |
@@ -130,8 +157,8 @@ Field semantics:
   and the **only origin** that receives the provider (§5). It MUST be an
   origin the app's author controls under their own name — for our stack
   that means `https://<label>.<id>.hns.one/`, `https://<id>.hns.one/`, or a
-  native scheme URL for first-party apps. Per RESERVED-LABELS / L8, an app
-  never gets an `hns.one` label that is not its own name.
+  native scheme URL for first-party apps. An app never gets an `hns.one`
+  label that is not its own name.
 - **`gateway.requires`** (array of strings). Serving behaviors the app
   depends on, as namespaced feature ids (§10 defines
   `one.hns.gateway.redirect.v1`). A host SHOULD warn at install when the
@@ -169,7 +196,7 @@ primary sentence — invariant 2).
 
 | `cap` | Effect | Maps to |
 |---|---|---|
-| `name.claim` | Claim a free label under a declared TLD for the user, keyed by a fresh control key in the user's vault. | Browser `claimIdentity` → `POST /api/identity/claim` |
+| `names.claim` | Register a NEW name under one of the app's declared `tlds` for the user, keyed by a fresh control key in the user's vault, on a **voucher** the app's server obtained from the registry (§5.8). Supersedes v0.1's `name.claim`, which is not honored by any host — it assumed an open TLD, and the one app that needs this runs on a partner TLD. | Browser `claimIdentity` (+`voucher`) → `POST /api/identity/claim`; the app's server → `POST /api/identity/partner/voucher` |
 | `name.list` | See which of the user's names *this app has been granted* (never the full portfolio). | Mediator grant store; `/api/identity/names` for state |
 | `dns.read` | Read the records matching the app's declared `records` shapes, plus pointer state, on granted names. | `GET /api/dns/records`, filtered by the mediator |
 | `dns.set-record` | Add or update records matching one declared shape on a granted name. | `POST /api/dns/mutate` (`add`/`update`) |
@@ -223,10 +250,25 @@ authorship (§7).
 
 The provider is injected **only** into frames whose origin exactly matches
 the installed manifest's `ui.entry` origin, from the main process, with
-`contextIsolation` on — the per-origin gating the NIP-07 signer plan already
-describes (`browser/docs/SOCIAL-MULTIPROTOCOL.md`). No provider for
+`contextIsolation` on. No provider for
 uninstalled apps, iframes of other origins, or `file:`. Presence of the
 provider is therefore itself a statement: "this page is an installed app".
+
+**The provider arrives LATE, and apps MUST NOT read its absence as an answer.**
+A host that decides "is this origin an installed app?" in its main process
+cannot inject the provider until that question has been answered, so on a cold
+start — or a tab restored while the browser is still starting its own
+subsystems — `window.handshake` is **undefined when the page's script runs**.
+An app that tests `typeof window.handshake` once, at load, and concludes "not
+this browser" will hide its own feature and, if it binds its controls after
+that test, leave a button that does nothing for the life of the page. That
+happened to the reference app on 2026-09-13.
+
+So an app MUST treat a missing provider as *not yet*, poll for it to the same
+deadline it gives any other presence probe (the reference app: 12 s), and bind
+every control **before** it awaits anything. Hosts SHOULD additionally fire a
+`handshake#initialized` event on `window` when the provider lands, so an app
+need not poll; an app MUST still work if the host does not.
 
 ### 5.2 Surface (v0.1)
 
@@ -245,13 +287,14 @@ interface HandshakeProvider {
     // Names ALREADY granted to this app, with per-name state.
     list(): Promise<Array<{ name: string, tld: string, granted: string[] }>>
     // Ask the user to grant an existing held name (picker is mediator UI;
-    // the app never sees names the user did not pick).
+    // the app never sees names the user did not pick). See "the picker".
     request(opts: { tld?: string }): Promise<{ name: string }>
-    // Ask the user to claim a NEW free label under a declared TLD.
-    // Mediator: availability check -> key generation in vault -> receipt
-    // signed in main -> /api/identity/claim -> grant recorded.
-    claim(opts: { tld: string, label: string })
-      : Promise<{ name: string, state: "bound" | "unsigned" }>
+    // Register a NEW name under one of the manifest's `tlds` for the user, on
+    // a voucher the app's OWN server obtained (§5.8). Mediator: manifest gate
+    // -> consent -> key generation in vault -> receipt signed in main ->
+    // /api/identity/claim with `voucher` -> grant recorded.
+    claim(opts: { tld: string, label: string, voucher: string })
+      : Promise<{ name: string, expires_at: string | null }>
   }
 
   records: {
@@ -305,6 +348,35 @@ Notes that are part of the contract, not commentary:
   pointer), the mediator re-renders consent with the registry's reason and,
   only if the user confirms, retries with `confirm: true`. Apps never get to
   set `confirm` themselves.
+- **The picker** (`names.request`, normative; written into v0.2 after the
+  reference host shipped the wrong thing). It is mediator chrome the app cannot
+  reach, and it **MUST**:
+  - offer **every** name in scope — the whole held list when `tld` is omitted
+    (D4), the matching ones when it is present. **No cap.** A picker that shows
+    the first few names makes the rest unreachable with no way for the user to
+    know;
+  - answer with the **name chosen**, never with a positional index the host
+    maps back. The mediator **MUST** re-check the answer against the list it
+    actually offered and treat anything else as a cancel;
+  - present a stable order the user can predict: the primary name first
+    (§5.5), then the rest in the host's own stored order — never re-sorted, so
+    the same names do not read as a different set here than elsewhere;
+  - show, per name, whether this app **already holds** it, so the choice means
+    something;
+  - be keyboard-operable, with one explicit *choose* and one explicit *cancel*;
+    a closed picker is a cancel;
+  - **always be shown.** If the host cannot parent the picker to a window, it
+    shows it unparented. Returning "the user declined" because the host could
+    not find a window is the host lying about the user (§5.7 `UserDeclined`);
+  - leave one log line per invocation naming the app, how many names were
+    offered and what was chosen or that it was cancelled. A picker that failed
+    silently is the one failure a bug report cannot describe.
+
+  Rejected explicitly: a native message box with the names as buttons. It caps
+  the list, answers with a platform-assigned index, cannot show which names the
+  app holds, and — with no parent window — can return a cancel the user never
+  pressed. The reference host shipped exactly that and a user who picked their
+  name was told `UserDeclined: no name chosen` (2026-09-13).
 - **Rate limits.** Per app id, mediator-enforced, before consent UI is even
   shown: default 6 consent prompts/minute and 60 accepted mutations/day
   (defaults, host-configurable). This bounds consent-fatigue attacks; the
@@ -432,10 +504,52 @@ auth: {
     url: string,      // absolute; MUST be same-origin with a ui.entry origin
     method: string,   // uppercased by the mediator
     body?: string,    // the exact bytes to be sent, or omitted
-    name?: string     // which granted name; default = the sole grant
+    name?: string     // which granted name; see "which name signs" below
   }): Promise<string> // "Nostr <base64 event>"
 }
 ```
+
+**Which name signs** (normative; corrected in v0.2 — see the note). An app
+SHOULD pass `name`: it already knows who it is signing in, and its server
+verifies the signature against *that* name's `_hns` record, so a token minted
+under any other name fails at the server rather than in the mediator. When
+`name` is absent the mediator resolves it in this order, and MUST NOT refuse
+while a rung remains:
+
+1. the sole granted name;
+2. the user's primary name, if it is granted to this app;
+3. **the name most recently granted to this app.**
+
+Only an app with **no** grant at all is refused, and the code is `NotGranted`
+(with "ask for one with `names.request()`"), never `UserDeclined`.
+
+> **Why rung 3 exists.** The first draft of this verb (V0.2-DELTA D1) said
+> "default = the single grant, else `UserDeclined` if ambiguous". That is
+> wrong, and shipping it proved it: a user who had granted an app two names,
+> neither of them their main identity, pressed *Sign in* and the app was told
+> **the user declined** — a false statement about someone who had said yes
+> twice. Ambiguity in the host is not a refusal by the person. The freshest
+> name they chose *for this app* is not a guess; it is the last answer they
+> gave, and hosts MUST record grant order so they can give it.
+
+**The app's own server MUST answer the browser's CORS preflight for every
+`ui.entry` origin** (normative, and learned the hard way twice). A native app
+on a Handshake name runs at `hns://<name>` while its API is at
+`https://<name>.<gateway>` — **different origins by construction**, so every
+call the app makes is cross-origin and the browser sends `OPTIONS` first. A
+server that assumes same-origin answers 405 and the sign-in dies before it is
+sent. The allow-list is the manifest's `ui.entry` origins and nothing else:
+echo the request's `Origin` when it is one of them, never a wildcard (these
+routes carry a bearer and act on its holder's behalf), and send `Vary: Origin`.
+
+Echo it on the **successes too**, not only on the refusals. A 200 without
+`Access-Control-Allow-Origin` is a session the server minted and the browser
+threw away: the user sees "could not be reached" while the row sits in the
+table. The reference service shipped exactly that bug on 2026-09-13 because
+`req` was an optional last argument that every error path passed and the two
+success paths did not — and every wire-level smoke it had only ever exercised
+401/404/405. Test a *successful* signed-in request with an `Origin` header, or
+the header matrix you believe you have is untested where it matters.
 
 Mediator obligations (normative):
 
@@ -460,6 +574,37 @@ to click through consent — the failure §5.4 exists to prevent. The install
 line says what it is: *"pxls will be able to prove you are **matt.w3** to
 pxls.hns.one. It cannot use this to change your names or records."*
 
+**Sign-in is AUTOMATIC once granted; a picker is for the first time or for
+switching.** (Recommended app behaviour, and the reference apps' behaviour.)
+
+A grant is durable: it lives in the host's own app store, survives restarts,
+and *is* the statement "this app may act as this name". An app that opens its
+name picker on every load is asking the user to re-answer a question they have
+already answered — and training them to click through consent, which is the
+failure §5.4 exists to prevent. So on load an app SHOULD:
+
+1. call `names.primary()`; if it answers a name, that name is granted (D2
+   guarantees `null` unless it is), else
+2. call `names.list()`, which returns **only** granted names (invariant 1), and
+   take the first, else
+3. show nothing but a sign-in control — nothing is granted yet, and *that* is
+   what the picker is for;
+
+and when 1 or 2 gave a name, call `auth.token({..., name})` and complete its own
+sign-in with **no picker and no click**. The picker reappears only for a "switch
+name" control the user presses deliberately.
+
+What is NOT automatic is the app's own **session**. The reference app keeps its
+bearer in page memory and lets it die with the tab: a grant and a session are
+different risks, and "I do not have to sign in again" is a statement about the
+grant. Apps SHOULD say plainly who they signed in as, and offer *switch* and
+*sign out* beside it.
+
+Apps SHOULD pass `{name}` to `auth.token` once they know which name they mean
+(§5.6 ladder rung 1): the app already knows, and the server verifies the
+signature against that name's own `_hns` record, so a token signed as anyone
+else fails there rather than in the host.
+
 **A provider's name list is not an authentication result** (normative, and the
 reason this verb exists). An app's *server* MUST independently verify any
 identity it acts on — for a Handshake name, against that name's own `_hns`
@@ -477,6 +622,239 @@ shipped verifier is covered end to end by
 `.pxls` ships today against the extension id `one.hns.auth.nip98`; hosts and
 `manifestGrantsAuth` accept it or the standard `identity.authenticate`
 interchangeably, so the app promotes to the standard id without a flag day.
+
+### 5.7 The error contract (normative)
+
+§5.2 said errors carry "machine-readable `code` plus prose" and never said
+what the codes are, so every host was free to invent them and no app could
+switch on one. The table is now part of the standard.
+
+**The shape an app sees.** Every operation returns a Promise. A refusal
+**MUST** reject with an `Error` whose
+
+- **`code`** property is one of the ids below — this is what an app branches
+  on, and it **MUST** be present as a property, not only inside the text; and
+- **`message`** is `"<Code>: <prose>"` — the code repeated in the text, because
+  custom `Error` properties do not reliably survive every host's page boundary,
+  and an app that lands in a generic `catch` must still be able to say
+  something true. The prose is the host's; it is a sentence for a person, and
+  apps **MUST NOT** parse it.
+
+Internally the operation should resolve an envelope (`{ok:false, code,
+message}`) across the process boundary and let the injected shim build the
+`Error`, so codes stay stable rather than depending on how the engine mangles
+a thrown value across a bridge.
+
+| `code` | Means | Typical cause |
+|---|---|---|
+| `NotGranted` | The app may not do this. | Not an installed app frame; the capability is not in its manifest; the name it asked to sign as is not granted; it has no grant at all yet. |
+| `UserDeclined` | The user was asked and said no. | The name picker was cancelled or closed; there was nothing to choose (the user holds no name in scope). **Never** used for a host-side ambiguity or a locked key store. |
+| `OutOfScope` | This host will not do it at all. | An operation this host does not implement; a `url` outside the app's own entry origins; an unknown verb. |
+| `RateLimited` | Too many requests from this app id. | The per-app token bucket, checked before signing and before any consent UI. |
+| `VaultLocked` | The key store could not be read. | A password-protected vault. **Not a refusal** — the message says how to unlock it (§5.3, §5.6). |
+| `Unavailable` | Something the host depends on failed. | The names could not be read; a backing service could not be reached. |
+
+A host MAY define further codes **for one capability's own outcomes** (the
+reference host does, for `content.publish.paste`, and §5.8 does for
+`names.claim`: `VoucherRejected`, `Cap`, `Taken`, `InvalidRequest`), and when
+it does it MUST publish them with that capability. It MUST NOT redefine any id above, and it
+MUST NOT emit a code it has not published: an undocumented code is a code
+nobody can handle. The reference host pins this mechanically — its test reads
+the surface source back and fails on any code missing from the published
+table.
+
+An app that receives a code it does not know MUST treat it as a plain failure
+and show the host's `message`; it MUST NOT show a raw `"<Code>: <prose>"`
+string to a person, which is the app's own bug, not the host's.
+
+**A host MUST log every refused operation with its code** (normative).
+
+    [handshake-apps] op=<op> app=<id> code=<Code> ms=<elapsed> — <message>
+
+and MUST log a line when it mints an `identity.authenticate` token:
+
+    [handshake-apps] op=auth.token app=<id> name=<name> method=<M> url=<host+path> minted
+
+A refusal that is clean on the wire and silent in the log is a refusal nobody
+can diagnose. On 2026-09-13 a user pressed *Sign in*, the app showed a banner
+he did not relay, and the host's log — which recorded the name picker's own
+line perfectly — said nothing whatever about what happened next. The whole day
+that followed was spent guessing between six codes any one of which would have
+been one line of log. A host MUST NOT make a person the transport for its own
+diagnostics.
+
+The line **MUST NOT** contain the token, the raw event, any key, the request
+body, or any request header; a url is reduced to its **host and path** (a query
+string can carry anything and this line lands in a file).
+
+**A host SHOULD also announce an operation that has not settled.** An operation
+that never resolves produces no outcome to log, by definition, and from the
+page it is indistinguishable from a dead button — the exact shape of *"I click
+it and nothing happens"*. The reference host logs on a ladder (5 s, 15 s, 45 s):
+
+    [handshake-apps] op=<op> app=<id> STILL RUNNING after <n>ms — it has not answered the page
+
+### 5.8 `names.claim` — a new name for the user, issued through an app
+
+**The problem this solves, stated once.** An app on a Handshake TLD it holds
+(MyPastebin on `.mypastebin`) wants its user to have `<label>.mypastebin`.
+Two authorities have to meet for that, and they live in different places:
+
+- the **registry's permission** to issue under that TLD — under the partner
+  surface that is a **partner token**, a credential that speaks for every name
+  under the TLD and therefore must never enter a browser (§1, SECURITY.md T1);
+- the **name's own key** — which `POST /api/identity/claim` requires as the
+  request's signer (`pubkey == signer`), and which must live in the user's
+  vault and never reach a server (invariant 1).
+
+Until 2026-09-13 the reference app resolved this by minting the key on its
+server, claiming with it, and handing the user a key file to import — a name
+the user did not hold until they did a second thing, and a server that had
+held a control key it then had to promise it had forgotten. That is not the
+ownership model of any other name, and it is not this standard's.
+
+**The voucher model.** The app's server asks the registry for a **voucher**:
+a one-shot, minutes-long permission for exactly one label under its TLD, bound
+to the sponsoring identity (the user's signed-in name) and carrying the
+pointer records the new name should serve (the app's own content). The server
+hands the opaque voucher string to its page; the page hands it to the host.
+The host then runs **the same claim it runs for every name** — key generated
+in the vault, receipt signed in the privileged process, NIP-98 by the new key
+— presenting the voucher in place of a partner token. The registry honors the
+voucher for that label only, counts the allowance against the sponsor the
+partner named (never one the redeemer chose), writes the pointer in the same
+request, and consumes the voucher in the same transaction as the claim.
+
+The result is a name like any other in the vault: **one key per name**, held
+only by the user, exportable, delegable, and usable by every op the app holds
+the moment the call returns. No key file, nothing to import, no token in a
+browser, no key on a server.
+
+**The manifest.** The app declares the capability and the namespace:
+
+```json
+"tlds": ["mypastebin"],
+"capabilities": [{ "cap": "names.claim", "scope": "claimed-label",
+                   "reason": "Register a .mypastebin address of your own." }]
+```
+
+A host honors `names.claim` only for a `tld` listed in the manifest's `tlds`
+(§3: `tlds` is the ceiling). An app that opts in but declares no `tlds` has
+asked for nothing; the host lists nothing under `version().capabilities`.
+
+**The op.**
+
+```ts
+names.claim(opts: { tld: string, label: string, voucher: string })
+  : Promise<{ name: string, expires_at: string | null }>
+```
+
+`expires_at` is the registry's own date for the claim (ISO 8601), or `null`
+for a name that does not lapse. A host MAY add `already_held: true` when the
+name was already claimed in this vault and was merely granted.
+
+**Host obligations** (normative, in order):
+
+1. Refuse `NotGranted` unless the installed manifest declares `names.claim`
+   AND lists `tld` in `tlds`.
+2. Check the shape of `label` (LDH, 1–63) and `voucher` (non-empty, bounded)
+   before anything else; refuse `InvalidRequest`. The registry, not the host,
+   decides length floors and reservations, and says so in words.
+3. Rate-limit per app id before any consent UI (§5.2): a claim is both a
+   prompt and a registry write.
+4. Read the vault; a locked key store is `VaultLocked`, never a refusal
+   (§5.7). A vault that does not exist yet MAY be created here — a name needs
+   somewhere to live, and the welcome page does the same.
+5. **Consent, in the host's words**, naming the app and the exact name:
+   *"MyPastebin wants to register **alpha.mypastebin** as a new name in your
+   vault."* — with the detail that the key is created in the host and the app
+   never sees it, that the app may act as the name as it acts as any granted
+   name, and that names under this TLD may lapse. App-supplied text appears
+   only as attributed secondary text (invariant 2). "Not now" is
+   `UserDeclined`, and nothing has been generated or sent at that point.
+6. Run the host's ordinary claim (§5.3 signing path) with `voucher` in the
+   body. The body carries **no sponsor** and the request **no partner token**
+   — the host has neither, by design. The registry's refusal codes map onto
+   this capability's codes (below); the registry's own sentence for the cap
+   and a taken name is what a person should read, so the host relays it.
+7. On success: store the identity row with the registry's `expires_at` and
+   the issuing app's id (`issuedBy`), **grant the name to the app at once**
+   (the user just consented to exactly that), log one line naming the app,
+   the name and the date — never a key — and return `{name, expires_at}`.
+8. On a definitive registry refusal (a code), discard the unclaimed key the
+   claim wrote before asking; on an unreachable registry keep it, because the
+   claim may have landed with the answer lost, and the host's ordinary
+   half-claim healing applies.
+
+**Codes** (this capability's own, per §5.7):
+
+| `code` | Means |
+|---|---|
+| `VoucherRejected` | The registry would not honor the voucher: used, expired, not one it issued, or issued for another name or TLD. Ask the app for a new one. |
+| `Cap` | The sponsor already holds the allowance under this TLD. The message is the registry's sentence. |
+| `Taken` | Somebody else claimed the label between the voucher and the claim. The message is the registry's sentence. |
+| `InvalidRequest` | The label or voucher has no acceptable shape (host), or the registry refused the label itself (reserved, too short). |
+
+plus `NotGranted`, `UserDeclined`, `RateLimited`, `VaultLocked`,
+`Unavailable` with their standard meanings.
+
+**Registry obligations** (normative for a registry that supports this flow):
+
+- `POST /api/identity/partner/voucher`, gated exactly as a partner claim is
+  (the TLD's partner token, server-to-server, no CORS): body
+  `{tld, label, sponsor_pubkey, ttl_seconds?, pointer?: {cid, ip?}}` →
+  `201 {voucher, tld, label, name, sponsor, expires_at, claim_ttl_days,
+  limit, held}`. It checks availability, the label rules and the sponsor's
+  allowance NOW — so the app learns "taken"/"you have three" before it asks
+  anyone to consent — and validates the pointer so it cannot fail later. TTL
+  is bounded (reference: 30–600 s, default 300). Refusals are `400 {error,
+  code}` with `label_invalid | reserved | name_taken | cap_reached | not_open |
+  pointer_invalid`; a missing or wrong token is `403`.
+- `POST /api/identity/claim` accepts `voucher` **instead of** a partner token.
+  Everything else is unchanged: `pubkey == signer`, the receipt, the label
+  rules. The voucher must name exactly this `tld` and `label`; the sponsor
+  recorded is the voucher's and a body that names its own is refused; the
+  allowance is re-checked **under the row lock**; the voucher is consumed in
+  the same transaction as the claim row, so one voucher cannot claim twice and
+  a refused claim leaves the voucher unspent; the pointer is written in the
+  same request, so the name never exists unpointed; `expires_at` comes from
+  the TLD's lending term. Refusals carry `code` (`voucher_rejected`,
+  `cap_reached`, `name_taken`, `label_invalid`, `reserved`, `not_open`) beside
+  the sentence.
+- A voucher is a random token stored **hashed** (like a session token), not
+  an HMAC over a server secret: single use needs a row either way, the row
+  can hold the binding, and there is then no second secret to provision or
+  rotate. Reference: `web/domains/identity.py` `issue_voucher` /
+  `claim_with_voucher`, `web/domains/models.py` `ClaimVoucher`.
+
+**What the app's server does** (recommended shape; MyPastebin's):
+
+1. Verify the session (`identity.authenticate`, §5.6): the sponsor is the
+   signed-in name's key, never a value the page sent.
+2. Ask the registry for the voucher with the app's own records as the
+   pointer, and return `{voucher, tld, label, name, voucherExpiresAt, limit,
+   held}` to the page. **Never** a key, and no claim from the server.
+3. The page calls `names.claim({tld, label, voucher})` and shows
+   `{name, expires_at}`; the server's own list (`GET
+   /api/identity/partner/names`) is the registry's record afterwards.
+
+**Why the voucher is not a key** (SECURITY.md T1). A voucher cannot claim
+anything by itself: the registry still requires a claim signed by the key
+being claimed, generated in a vault, after consent the host obtained. A stolen
+voucher lets an attacker with their own browser claim *that one label* under
+*that sponsor's* allowance for a few minutes — the same thing the sponsor was
+about to do — and nothing else. It is therefore held by the page in memory
+for the length of one call and is never stored, logged or put in a URL.
+
+Reference implementation: browser `src/apps/handshake-surface.js`
+(`namesClaim`, `claimConsentCopy`, `CLAIM_REGISTRY_CODES`),
+`src/identity/identity-account.js` (`claimIdentity` with `voucher`,
+`issuedBy`, `expiresAt`), `src/apps/handshake-ops.js` (`confirmClaimDialog`);
+registry `web/core/api_identity.py` (`partner_voucher`, `claim`); consumer
+`pastebin/server/registry.js` (`voucher`, `voucherFor`) and
+`pastebin/names-ui.js` (`register`). Tests: browser
+`tests/hns/handshake-apps.test.js` (§5.8 block), registry
+`domains/tests_voucher_claims.py`, app `test/names.test.js`.
 
 ## 6. Record namespaces and cross-app isolation
 
@@ -567,13 +945,49 @@ from their name directly — the system stays permissionless.
   verification state, and *full* requested capability list (rendered as
   effects, per name-agnostic templates) → user accepts. Install alone grants
   **no names** — it registers the ceiling.
-- **Grant** = per (app id, name), created only through `names.request` /
-  `names.claim` pickers or the settings UI. Recorded with the manifest hash
-  it was consented under.
+- **Grant** = per (app id, name), created only through the `names.request`
+  picker, the `names.claim` consent (a name the user just agreed to register
+  through this app is granted to it in the same act, §5.8), or the settings
+  UI. Recorded with the manifest hash it was consented under.
 - **Update** = new manifest verified per §7. Capabilities/shapes that are a
   subset of the consented hash apply silently; any broadening shows a diff
   consent ("2url now also asks to: …") and existing grants stay pinned to
   the old hash until accepted.
+
+  **When the host looks** (added in v0.2 after this was found unimplemented and
+  unimplementable-by-accident in the reference host). A host **MUST** re-read
+  an installed app's manifest — it is not enough to fetch it once at install
+  and never again. Without this rule a host satisfies every word above and
+  still never applies it: the reference host returned early from discovery for
+  any origin already installed, so an app that shipped a new capability was
+  permanently frozen at the manifest the user first saw, `version()` kept
+  reporting the old set, and the app hid the feature it had just released.
+  Normative timing:
+
+  - re-read on page load at an installed entry origin, **rate-limited to once
+    per origin per session** (an app that navigates ten times costs one fetch);
+  - re-read on an explicit user action — a host **MUST** offer a "check for
+    updates" affordance wherever it lists installed apps, and that action
+    **MUST** bypass the per-session budget and any refusal made earlier in the
+    session, because the person asking is the reconsideration;
+  - compare the manifest **hash**; identical bytes are a no-op with no log and
+    no prompt.
+
+  **What each outcome does.** Capability additions → the diff consent, worded
+  as an *update* and listing **only what is new** (re-reciting what is already
+  granted teaches people the list is boilerplate). Accepting re-pins the
+  install at the new hash with grants preserved; declining keeps the OLD
+  manifest pinned and the refusal is **session-only**, like every other
+  refusal. Capability removals or metadata-only changes → apply silently and
+  **log**. A new manifest that fails validation, or that no longer lists the
+  origin it was served at, → **keep the installed one** and log why: a broken
+  deploy of an app must not become a dialog the user cannot act on.
+
+  **Where the user can see it.** A host's installed-apps surface **MUST** show,
+  per app, the version it is installed at and what that version may do, in the
+  same effect sentences the consent screen used. "Which version did I agree to,
+  and to what?" has to be answerable somewhere other than a dialog that has
+  already closed.
 - **Uninstall / revoke** — §9.
 
 ## 9. Revocation
@@ -600,13 +1014,13 @@ update time and treat epoch changes per §7.4.
 Apps whose function depends on how the gateway serves a record declare it in
 `gateway.requires`. v0.1 defines one feature beyond the existing baseline:
 
-### 10.1 Baseline (exists today, id `one.hns.gateway.content.v1`)
+### 10.1 Baseline (id `one.hns.gateway.content.v1`)
 
 `ipfs=<cid>` / `ar=<txid>` TXT at a label → gateway serves the content
 (IPFS wins over Arweave; `pointer_for` in gateway.py). `.well-known`
 identity endpoints outrank published content unconditionally.
 
-### 10.2 `one.hns.gateway.redirect.v1` (NEW — specified here, not built)
+### 10.2 `one.hns.gateway.redirect.v1`
 
 **The record.** One TXT at the label being redirected:
 
@@ -665,94 +1079,41 @@ identity endpoints outrank published content unconditionally.
 via the gateway) SHOULD honor the same record with the same precedence,
 so the link works identically on and off the mirror.
 
-## 11. What exists today vs what must be built
+## 11. What exists today
 
-Grounded against the tree on 2026-08-22. Nothing below edits in-flight code.
+**Wildroot (desktop browser), the reference host:**
+- Manifest discovery at `<origin>/.well-known/hnsapp.json` (falling back to
+  `<origin>/manifest/<label>.app.json`), schema validation, install, the grant
+  store, and the update checks of §8.
+- The `window.handshake` provider, injected only into an installed app's
+  `ui.entry` origins (a single origin or a D5 list), with `version`,
+  `names.primary`, `names.list`, `names.request` (the picker of §5.2),
+  `names.claim` (§5.8), `identity` (§5.5) and `auth.token` (§5.6).
+- The error codes and logging of §5.7.
+- `records.get`, `records.propose` and `content.publish` answer `OutOfScope`.
+- Manifest signatures (§7) are not checked: every install is unverified and
+  shown with a warning. Consent prompts other than the name picker are native
+  dialogs, not the main-owned overlay §5.4 describes.
 
-**Exists, reused as-is (the standard's foundation):**
-- `POST /api/dns/mutate` + `/api/dns/pointer` + `GET /api/dns/records`
-  (`web/core/api_dns.py`) with NIP-98-or-session auth, and every rule in
-  `web/domains/dns_records.py`: `USER_TYPES`, `check_scope`, per-type
-  validators, managed locks (`_hns`/`_atproto`/OPENPGPKEY/SMIMEA/DANE-TLSA),
-  coexistence, limits, `NeedsConfirm` 409, locked read-modify-write.
-- NIP-98 authentication with URL binding + single-use event ids
-  (`web/domains/identity.py authenticate`, `nostr.py verify_nip98`,
-  `AuthEventSeen`).
-- Vault-held control keys, sign-in-main, `panelPost` public-data-only IPC
-  (`browser/src/identity/identity-account.js` — `claimIdentity`,
-  `bindAtproto`, `signAuth`).
-- Free-label claiming under open TLDs (`/api/identity/available`,
-  `/api/identity/claim`, `claim_identity`, `resolve_target`).
-- The publish pipeline (`web/publishing/services.py`, `/api/publish`,
-  `agregore://publish`) and gateway content serving (`gateway.py`
-  `pointer_for`/`_serve_ipfs`), i.e. the whole of the `pinthis` example's
-  runtime except the app framing.
-- The chrome-overlay consent pattern (share-panel `WebContentsView`) and the
-  per-origin provider gating design (SOCIAL-MULTIPROTOCOL's NIP-07 plan).
+**hns.one gateway:** serves `one.hns.gateway.content.v1` and
+`one.hns.gateway.redirect.v1` (§10) and advertises both at `/_gateway/features`
+on each name's host.
 
-**Reference op logic already built in the browser (electron-free, tested):**
-- The `identity` read op — `browser/src/identity/app-identity.js`
-  (`appMainIdentity`), manifest-gated by
-  `browser/src/protocols/app-manifest.js` (`manifestGrantsIdentity`), wired
-  end to end into the `2url` app (`browser/src/twourl.js` → the page's
-  "Signed in as …"). Covered by `tests/hns/twourl-identity.test.js`.
-- The `identity.authenticate` op — `browser/src/identity/app-attest.js`
-  (`appAuthToken`): the manifest gate (`manifestGrantsAuth`), the ORIGIN gate
-  (`originAllowedForAuth`, single-origin and D5 list), and control-key NIP-98
-  signing over the existing `signAuth`. Covered by `tests/hns/app-attest.test.js`
-  and, cross-implementation, by pxls's own verifier test. These are the two
-  reusable capabilities `.pxls` needs; what remains is the injection host below.
+**HNS.ONE registry:** NIP-98-signed DNS mutations, claims and publishing
+(`/api/publish`), and the voucher flow of §5.8
+(`POST /api/identity/partner/voucher`, `voucher` on `POST /api/identity/claim`).
 
-**Must be built — browser (mediator):**
-- Manifest fetch/validate/verify-install flow, grant store, provenance
-  ledger, rate limiter.
-- The `window.handshake` provider + preload, per-origin injection **for
-  remote app origins** (`https://pxls.hns.one/`, native `https://pxls/`). This
-  is the piece that lets a live app page reach the two ops above; it MUST NOT
-  be shortcut by injecting a control-key signer into a remote origin without
-  an install + grant (that would make any page a signing oracle — invariant 1).
-  The first-party chrome path (`wildroot://2url`) already has this via its
-  URL-gated preload + per-sender re-check; a web-origin injection is the same
-  discipline keyed on the installed manifest's `ui.entry` origin(s).
-- Consent overlay UI (main-owned), including `NeedsConfirm` pass-through and
-  the dangerous-capability treatments.
-- Schema-template expansion (`propose` → concrete records) and shape-match
-  enforcement, including delete-scope checks.
-- Settings surface: installed apps, grants, per-app records, revoke+cleanup.
+**Apps:** `.pxls` uses `identity.authenticate` (still under the extension id
+`one.hns.auth.nip98`, which hosts accept interchangeably). MyPastebin uses
+`identity.authenticate` and `names.claim`. `2url` and `pinthis` run only as
+first-party browser pages (`wildroot://2url`, `wildroot://publish`); their
+manifests in `examples/` describe the contract those pages follow.
 
-**Must be built — gateway:**
-- `one.hns.gateway.redirect.v1` per §10.2 (validation, precedence,
-  self-target check, denylist hook). A feature-advertisement endpoint
-  (e.g. `/_gateway/features`) so hosts can check `gateway.requires`.
+**Not built:** manifest signing and the `_hns` anchor check (§7), the
+provenance ledger (§6), schema-template expansion and shape enforcement for
+`records.propose`, and server-side shape enforcement in the registry.
 
-**Must be built — registry panel (all optional for v0.1, listed for v0.2):**
-- Server-side app attribution (an `app` tag in the NIP-98 event) + shape
-  enforcement — defense in depth for §6.
-- A NIP-98 publish path: today `/api/publish` is bearer-token,
-  single-account (`X-HNS-Panel-Token`, acts as the operator) — fine for the
-  first-party browser, **not usable by identity-keyed third-party users**.
-  The pinthis example manifest is honest about this (its `content.publish`
-  currently rides the operator token).
-- `.well-known/hnsapp.json` serving for app names + the `hnsapp=` TXT
-  convention (gateway or panel side).
-
-**Name status — CORRECTED 2026-08-22 against the chain** (the earlier text
-here trusted stale `our-tlds.json`/`NAMING-AND-PUBLISHING §0.1` and was wrong;
-verified with `hnslib.name_resource` on the full node):
-- **Both `pinthis` and `2url` are held AND delegated to us** — on-chain NS are
-  `ns1.hns.one`/`ns2.hns.one`, NOT Namebase glue. Neither is stuck at Namebase.
-- **Both were provisioned 2026-08-22** (`manage.py provision_tld … --open-for-
-  claims`): served `Zone` + `ManagedName`, open for claims, in `zones.json`.
-- **Remaining before a manifest can be SIGNED against a name:** the DNSSEC
-  anchor — `dnssec.py sign <name>` (free, local) + an on-chain **DS commit**
-  (`ds-commit.py`, ~0.03 HNS each; per the spend rule, announce first + run
-  `snipe.py doctor` after) so the `_hns` control record is chain-anchored.
-  For `foo.<tld>.hns.one` dotted TLS, also `dotted-tls.py apply <tld> --yes`.
-  None of this is a transfer/delegation blocker — it is ordinary provisioning
-  we control. Do NOT re-read delegation state from `our-tlds.json`; ask the
-  chain (see the `hns-wallet` skill).
-
-## 12. Open questions for Matt
+## 12. Open questions
 
 1. **Server-side shape enforcement (v0.2?).** Should the registry learn an
    `app` NIP-98 tag and enforce declared shapes, so cross-app isolation

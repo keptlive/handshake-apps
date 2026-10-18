@@ -40,7 +40,10 @@ receipt for a name it doesn't hold, a Nostr event, a wallet transaction).*
   the four whitelisted endpoints, and claim receipts built by the mediator's
   own `claimIdentity` (§5.3). An app cannot influence a signed byte except
   through schema-validated fields that the mediator embeds into structures
-  it built.
+  it built. `names.claim` (§5.8) adds no signing path: the voucher the app
+  supplies is an opaque string the mediator places in the claim body it built
+  and signed itself, for a `tld`+`label` it validated and the user consented
+  to; the app never chooses the key, the receipt or the signer.
 - Keys are read from the vault inside the privileged function and go out of
   scope after signing (`bindAtproto` pattern); nothing key-derived crosses
   IPC but signatures over mediator-built messages.
@@ -49,6 +52,22 @@ receipt for a name it doesn't hold, a Nostr event, a wallet transaction).*
 - Residual risk: a main-process RCE owns the vault. That is the browser's
   existing security boundary, unchanged by this standard; the standard's job
   is to add **no new** path across it, and it adds none.
+
+### T1a — A partner token in a browser, or a control key on a server
+*An app on a partner TLD gets its user a name by carrying the TLD's partner
+token into the page, or by minting the user's control key on its server and
+handing it over.*
+
+- Neither happens under §5.8. The token stays on the app's server and buys a
+  **voucher** — one label, one sponsor, minutes, single use, stored hashed —
+  and the browser claims with a key it generated in the vault. The registry
+  still requires `pubkey == signer`, still counts the cap against the sponsor
+  the *partner* named, and consumes the voucher in the claim's transaction.
+- Residual risk: a voucher is a bearer secret for the length of one call. A
+  stolen one lets its holder claim *that label* under *that sponsor's*
+  allowance for a few minutes, with their own key — the thing the sponsor was
+  about to do, and nothing else. The page holds it in memory only; the host
+  never logs or stores it; the registry bounds its life (≤ 600 s).
 
 ### T2 — Over-broad capabilities / scope creep
 *A manifest requests everything ("all TXT on all names"), or a benign v1
