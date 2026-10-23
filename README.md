@@ -7,6 +7,10 @@ signature bound to the app's own origin.
 
 ## Status
 
+Validate bundled examples with `python -m pip install jsonschema` followed by
+`python scripts/validate.py`. This checks the JSON Schema and URI formats;
+it does not verify signatures, capability semantics or browser integration.
+
 Draft, version 0.2. The [Wildroot](https://wildroot.io) browser implements
 install, grants and the `window.handshake` provider with names, identity,
 sign-in tokens and voucher-backed name registration. Record writes and
